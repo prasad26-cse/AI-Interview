@@ -6,7 +6,7 @@ A production-quality AI-powered interview platform built with React, TypeScript,
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-live demo: https://68dd3ecd2430e97e76de4e9a--verdant-paprenjak-0b9a35.netlify.app/
+live demo:(https://68de08ba34c47f7d98d365dd--symphonious-pasca-ba1360.netlify.app/)
 
 ## Features
 
