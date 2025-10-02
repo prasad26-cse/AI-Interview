@@ -19,7 +19,7 @@ live demo: https://68dd3ecd2430e97e76de4e9a--verdant-paprenjak-0b9a35.netlify.ap
   - No coding questions - only theoretical knowledge testing
 - **Camera & Microphone Recording**: Records video/audio for each answer (with user consent)
 - **Auto-Submit**: Automatically submits answers when time runs out
-- **AI Grading**: Real-time grading using Groq API (LLaMA 3.3)
+- **AI Grading**: Real-time grading using Hugging Face API
 - **Session Persistence**: Resume interrupted sessions with "Welcome Back" modal
 
 ### Interviewer Dashboard
@@ -43,7 +43,7 @@ live demo: https://68dd3ecd2430e97e76de4e9a--verdant-paprenjak-0b9a35.netlify.ap
 - **Storage**: localForage (IndexedDB)
 - **UI Library**: Ant Design
 - **Build Tool**: Vite
-- **AI Service**: Groq API (LLaMA 3.3 70B)
+- **AI Service**: Hugging Face Inference API
 - **Resume Parsing**: pdfjs-dist (PDF) + mammoth (DOCX)
 - **Media Recording**: MediaRecorder API
 
@@ -54,17 +54,42 @@ live demo: https://68dd3ecd2430e97e76de4e9a--verdant-paprenjak-0b9a35.netlify.ap
    npm install
    ```
 
-2. **Start development server**:
+2. **Configure API Key** (Required):
+   
+   ⚠️ **IMPORTANT**: You must configure a Hugging Face API key before using the application.
+   
+   **Option A - Environment Variable (Recommended for Development)**:
+   ```bash
+   # Create a .env file in the root directory
+   cp .env.example .env
+   
+   # Edit .env and add your API key:
+   VITE_HUGGINGFACE_API_KEY=your_actual_huggingface_api_key_here
+   ```
+   
+   **Option B - Settings UI (Recommended for Production)**:
+   - Start the application
+   - Click the "Settings" button in the top-right corner
+   - Enter your Hugging Face API key
+   - Click "Save" - the key will be stored in browser localStorage
+   
+   **Get Your Free API Key**:
+   - Visit [Hugging Face Tokens](https://huggingface.co/settings/tokens)
+   - Sign up for a free account
+   - Generate an API token (read access is sufficient)
+   - Copy the token for use in the application
+
+3. **Start development server**:
    ```bash
    npm run dev
    ```
 
-3. **Build for production**:
+4. **Build for production**:
    ```bash
    npm run build
    ```
 
-4. **Preview production build**:
+5. **Preview production build**:
    ```bash
    npm run preview
    ```
@@ -73,16 +98,17 @@ live demo: https://68dd3ecd2430e97e76de4e9a--verdant-paprenjak-0b9a35.netlify.ap
 
 ### API Setup
 
-This application uses the Groq API for AI-powered features. You'll need to:
+This application uses the Hugging Face Inference API for AI-powered features. The API key can be configured in two ways:
 
-1. **Get a Groq API Key**:
-   - Visit [Groq Console](https://console.groq.com)
-   - Sign up for a free account
-   - Generate an API key
+1. **Environment Variable** (`.env` file):
+   - Best for development and local testing
+   - Key is loaded automatically on application start
+   - Not committed to version control
 
-2. **Configure the Key**:
-   - Option A: Set it in the application settings UI
-   - Option B: Add it to your environment configuration
+2. **Settings UI** (localStorage):
+   - Best for production deployments
+   - Users can configure their own API key
+   - Persists across browser sessions
 
 ### Admin Access
 
@@ -120,9 +146,8 @@ src/
 │   ├── IntervieweePage.tsx
 │   └── InterviewerPage.tsx
 ├── services/           # External API services
-│   ├── groqService.ts      # Service wrapper
-│   ├── groqDirectAPI.ts    # Groq API implementation
-│   └── groqAPI.ts          # Standalone Groq service
+│   ├── huggingfaceService.ts   # Service wrapper for HF API
+│   └── huggingfaceAPI.ts       # Hugging Face API implementation
 ├── store/              # Redux store and slices
 │   ├── slices/
 │   │   ├── authSlice.ts
@@ -224,11 +249,11 @@ src/
 - Allows playback in interviewer dashboard
 
 ### AI Integration
-- Generates unique questions per session using Groq's LLaMA 3.3 70B model
+- Generates unique questions per session using Hugging Face models
 - Grades answers with 0-10 score and detailed feedback
 - Creates final summary after all questions completed
 - Includes fallback scoring if API calls fail
-- Fast inference with Groq's optimized infrastructure
+- Uses template-based question generation for reliability
 
 ### Persistence
 - Redux state persisted to IndexedDB via redux-persist
@@ -273,11 +298,15 @@ src/
 - Minimum 20 characters of content required
 - Check browser console (F12) for detailed errors
 
-**Interview Not Starting**:
-- Verify API key is configured correctly
+**Interview Not Starting / API Key Errors**:
+- **Error: "API key not configured"**: 
+  - Click Settings button and enter your Hugging Face API key
+  - OR create a `.env` file with `VITE_HUGGINGFACE_API_KEY=your_key`
+  - Get a free token from https://huggingface.co/settings/tokens
+- **Error: "Failed to grade answer"**: Usually means API key is missing or invalid
 - Check internet connection
-- Ensure you haven't exceeded API rate limits
-- Try refreshing the page
+- Ensure you haven't exceeded API rate limits (Hugging Face free tier limits)
+- Try refreshing the page and re-entering the API key
 
 **Camera/Microphone Issues**:
 - Grant browser permissions when prompted
@@ -436,7 +465,7 @@ For issues or questions:
 ## 🙏 Acknowledgments
 
 - Built with [React](https://reactjs.org/)
-- Powered by [Groq AI](https://groq.com/)
+- Powered by [Hugging Face](https://huggingface.co/)
 - UI components from [Ant Design](https://ant.design/)
 - State management with [Redux Toolkit](https://redux-toolkit.js.org/)
 

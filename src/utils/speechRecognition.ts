@@ -87,38 +87,39 @@ export function createSpeechRecognition(
   };
 
   recognition.onend = () => {
-    console.log('Speech recognition ended');
-    isRunning = false;
+    console.log('Speech recognition ended, isRunning:', isRunning);
     
-    // Auto-restart if it stops unexpectedly (unless manually stopped)
-    if (isRunning) {
-      try {
-        recognition.start();
-      } catch (e) {
-        console.log('Could not restart recognition');
-      }
-    }
+    // Don't auto-restart - let the user control it
+    // This prevents the recognition from continuing to the next question
+    isRunning = false;
+    finalTranscript = ''; // Clear transcript when ended
   };
 
   return {
     start: () => {
       if (!isRunning) {
         try {
-          finalTranscript = ''; // Reset transcript
+          finalTranscript = ''; // Reset transcript on start
+          isRunning = true;
           recognition.start();
+          console.log('Speech recognition starting...');
         } catch (error) {
           console.error('Failed to start speech recognition:', error);
           if (onError) {
             onError('Failed to start speech recognition');
           }
         }
+      } else {
+        console.log('Speech recognition already running');
       }
     },
     stop: () => {
       if (isRunning) {
-        isRunning = false;
+        isRunning = false; // Set to false BEFORE stopping
+        finalTranscript = ''; // Clear accumulated transcript
         try {
           recognition.stop();
+          console.log('Speech recognition stopping...');
         } catch (error) {
           console.error('Failed to stop speech recognition:', error);
         }

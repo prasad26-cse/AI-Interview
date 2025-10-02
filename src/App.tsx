@@ -15,7 +15,6 @@ import { InterviewerPage } from '@/pages/InterviewerPage';
 import { AboutPage } from '@/pages/AboutPage';
 import { PricingPage } from '@/pages/PricingPage';
 import { ContactPage } from '@/pages/ContactPage';
-// Settings modal removed - API key is now permanent
 import { WelcomeBackModal } from '@/components/WelcomeBackModal';
 import { LoginModal } from '@/components/LoginModal';
 import { FeaturesSection } from '@/components/FeaturesSection';
@@ -30,13 +29,11 @@ const AppContent: React.FC = () => {
   const { isAuthenticated } = useSelector((state: RootState) => state.auth);
   const { sessions, currentSessionId } = useSelector((state: RootState) => state.sessions);
 
-  // Settings removed - API key is permanent
   const [showLogin, setShowLogin] = useState(false);
 
   useEffect(() => {
-    // Initialize Groq API - users need to configure their API key
-    // Get free API key from: https://console.groq.com/keys
-    console.log('Groq API ready for configuration');
+    // API key is hardcoded - no initialization needed
+    console.log('✅ Hugging Face API is ready (hardcoded key)');
 
     // Check for unfinished sessions ONLY on initial load
     // Don't show modal if user is already on interviewee tab (actively interviewing)
@@ -57,6 +54,25 @@ const AppContent: React.FC = () => {
       }
       // Switch to dashboard
       dispatch(setActiveTab('interviewer'));
+    } else if (key === 'interviewee') {
+      // RESET INTERVIEWEE TAB - Clear all previous data for fresh start
+      console.log('🔄 Switching to Interviewee tab - Resetting all data...');
+      
+      // Clear current session to force fresh start
+      if (currentSessionId) {
+        // Don't show welcome back modal
+        dispatch(setShowWelcomeBack(false));
+      }
+      
+      // When leaving dashboard, logout to require auth next time
+      if (activeTab === 'interviewer' && isAuthenticated) {
+        dispatch(logout());
+      }
+      
+      // Switch to interviewee tab
+      dispatch(setActiveTab('interviewee'));
+      
+      console.log('✅ Interviewee tab ready for new interview');
     } else {
       // When leaving dashboard, logout to require auth next time
       if (activeTab === 'interviewer' && isAuthenticated) {
@@ -152,11 +168,11 @@ const AppContent: React.FC = () => {
             </h1>
             <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>
               <ThunderboltOutlined style={{ marginRight: 4 }} />
-              Powered by Groq AI
+              Powered by Hugging Face AI
             </p>
           </div>
         </div>
-        {/* Settings button removed - API key is permanent */}
+        {/* Settings button removed - API key is hardcoded */}
       </Header>
       <Content style={{ background: 'transparent', minHeight: 'calc(100vh - 80px)' }}>
         <div className="slide-up" style={{ maxWidth: 1400, margin: '0 auto', padding: '24px' }}>
@@ -186,7 +202,6 @@ const AppContent: React.FC = () => {
       {/* Enhanced Footer */}
       <EnhancedFooter onNavigate={(key) => dispatch(setActiveTab(key as 'interviewee' | 'interviewer'))} />
 
-      {/* Settings modal removed - API key is permanent */}
       <WelcomeBackModal />
       <LoginModal 
         visible={showLogin} 

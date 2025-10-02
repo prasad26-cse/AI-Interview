@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Input, Button, App } from 'antd';
 import { getApiKey, saveApiKey } from '@/utils/storage';
-import { initializeGroq } from '@/services/groqService';
+import { initializeHuggingFace } from '@/services/huggingfaceService';
 
 interface SettingsModalProps {
   visible: boolean;
@@ -35,7 +35,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ visible, onClose }
     setLoading(true);
     try {
       await saveApiKey(apiKey);
-      initializeGroq(apiKey);
+      initializeHuggingFace(apiKey);
       message.success('API key saved successfully');
       onClose();
     } catch (error) {
@@ -61,15 +61,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ visible, onClose }
     >
       <div style={{ marginBottom: 16 }}>
         <p style={{ marginBottom: 8 }}>
-          <strong>Groq API Key</strong>
+          <strong>Hugging Face API Key</strong>
         </p>
         <Input.Password
-          placeholder="Enter your Groq API key"
+          placeholder="Enter your Hugging Face API key"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
         />
         <p style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
-          Get your free API key at <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">Groq Console</a>. Your key is stored locally and only sent to Groq's API.
+          Get your free API token at <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener noreferrer">Hugging Face</a>. Your key is stored locally and only sent to Hugging Face's API.
         </p>
       </div>
     </Modal>

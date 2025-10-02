@@ -125,82 +125,224 @@ export interface ResumeData {
 }
 
 export function extractContactFields(text: string): ContactFields {
-  console.log('Extracting contact fields from text of length:', text.length);
+  console.log('📋 Extracting contact fields from text of length:', text.length);
+  console.log('📄 First 500 characters:', text.substring(0, 500));
   
   // Clean the text for better extraction
   const cleanText = text.replace(/\s+/g, ' ').trim();
   
-  // Enhanced email extraction with multiple patterns
-  const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/gi;
+  // POWERFUL EMAIL EXTRACTION with multiple patterns and validation
+  const emailRegex = /\b[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}\b/gi;
   const emailMatches = cleanText.match(emailRegex) || [];
-  // Filter out common false positives
-  const validEmails = emailMatches.filter(e => 
-    !e.includes('example.com') && 
-    !e.includes('domain.com') &&
-    !e.includes('email.com')
-  );
+  
+  // Filter out common false positives and validate
+  const validEmails = emailMatches.filter(e => {
+    const lower = e.toLowerCase();
+    return !lower.includes('example.com') && 
+           !lower.includes('domain.com') &&
+           !lower.includes('email.com') &&
+           !lower.includes('test.com') &&
+           !lower.includes('sample.com') &&
+           !lower.includes('placeholder') &&
+           e.includes('@') &&
+           e.split('@')[1].includes('.') && // Must have domain extension
+           e.split('@')[0].length >= 2 && // At least 2 chars before @
+           e.split('@')[1].split('.')[0].length >= 2; // At least 2 chars in domain
+  });
+  
   const email = validEmails.length > 0 ? validEmails[0] : undefined;
   console.log('Extracted email:', email);
 
-  // Enhanced phone extraction with international format support
-  // Supports formats: +1 (123) 456-7890, 123-456-7890, 123.456.7890, +91-1234567890, etc.
+  // POWERFUL PHONE EXTRACTION with validation for 10-digit numbers
+  // Supports: +91-9876543210, 9876543210, (987) 654-3210, 987-654-3210, etc.
   const phoneRegexes = [
-    /\+\d{1,3}[\s-]?\(?\d{3,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{4}/g, // +1 (123) 456-7890, +91-1234567890
-    /\(?\d{3,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{4}/g,                // (123) 456-7890 or 123-456-7890
-    /\d{10,12}/g,                                                // 1234567890 or 123456789012
-    /\d{3}[\s.-]?\d{3}[\s.-]?\d{4}/g,                           // 123-456-7890
-    /\+\d{1,3}\s?\d{10}/g                                        // +91 1234567890
+    /(?:Phone|Mobile|Contact|Tel|Cell|Ph)[:\s]*([+]?\d{1,3}[\s.-]?\(?\d{3,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{4})/gi,
+    /(?:Phone|Mobile|Contact|Tel|Cell|Ph)[:\s]*(\d{10})/gi,
+    /\+\d{1,3}[\s-]?\(?\d{3,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{4}/g,
+    /\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/g,
+    /\b\d{10}\b/g,
+    /\+\d{1,3}\s?\d{10}/g,
+    /\d{3}[\s.-]\d{3}[\s.-]\d{4}/g
   ];
   
   let phone: string | undefined;
+  const foundNumbers: string[] = [];
+  
+  // AGGRESSIVE: Find any sequence of 10-12 digits (with or without spaces/separators) after "Mobile/Phone/Contact"
+  const aggressivePattern = /(?:Mobile|Phone|Contact|Tel|Cell|Ph)[:\s]*([+\d\s.-]{10,20})/gi;
+  const aggressiveMatches = text.match(aggressivePattern);
+  if (aggressiveMatches && aggressiveMatches.length > 0) {
+    aggressiveMatches.forEach(match => {
+      const digitsOnly = match.replace(/\D/g, '');
+      console.log(`Found potential phone (aggressive): "${match}" -> ${digitsOnly.length} digits`);
+      if (digitsOnly.length === 10) {
+        foundNumbers.push(digitsOnly); // Store just the 10 digits
+      } else if (digitsOnly.length === 12 && digitsOnly.startsWith('91')) {
+        foundNumbers.push(digitsOnly.substring(2)); // Remove country code, store 10 digits
+      }
+    });
+  }
+  
   for (const regex of phoneRegexes) {
-    const matches = cleanText.match(regex);
+    const matches = text.match(regex); // Use original text, not cleanText
     if (matches && matches.length > 0) {
-      // Take the first valid phone number
-      phone = matches[0].trim();
-      console.log('Extracted phone:', phone);
-      break;
+      matches.forEach(match => {
+        // Clean the number: remove all non-digit characters
+        const digitsOnly = match.replace(/\D/g, '');
+        
+        console.log(`Found potential phone: "${match}" -> ${digitsOnly.length} digits`);
+        
+        // Validate: Must be exactly 10 digits (or 11-12 with country code)
+        if (digitsOnly.length === 10) {
+          // Perfect 10-digit number
+          if (!foundNumbers.includes(match.trim())) {
+            foundNumbers.push(match.trim());
+          }
+        } else if (digitsOnly.length === 11 && digitsOnly.startsWith('1')) {
+          // US number with country code
+          if (!foundNumbers.includes(match.trim())) {
+            foundNumbers.push(match.trim());
+          }
+        } else if (digitsOnly.length === 12 && digitsOnly.startsWith('91')) {
+          // Indian number with country code
+          if (!foundNumbers.includes(match.trim())) {
+            foundNumbers.push(match.trim());
+          }
+        }
+      });
+      
+      // If we found valid numbers, break
+      if (foundNumbers.length > 0) break;
     }
   }
+  
+  // Take the first valid phone number and clean it to 10 digits
+  if (foundNumbers.length > 0) {
+    const rawPhone = foundNumbers[0];
+    const digitsOnly = rawPhone.replace(/\D/g, '');
+    
+    // If 12 digits and starts with 91, remove country code
+    if (digitsOnly.length === 12 && digitsOnly.startsWith('91')) {
+      phone = digitsOnly.substring(2); // Get last 10 digits
+    } else if (digitsOnly.length === 10) {
+      phone = digitsOnly;
+    } else {
+      phone = rawPhone; // Keep as is if doesn't match expected format
+    }
+    
+    console.log('✅ Extracted phone:', phone, `(${phone.replace(/\D/g, '').length} digits)`);
+  } else {
+    console.log('❌ No valid phone number found');
+  }
 
-  // Enhanced name extraction with multiple strategies
+  // POWERFUL NAME EXTRACTION with multiple strategies
   const lines = text
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean);
   
+  console.log('👤 Starting name extraction...');
+  console.log('Total lines in resume:', lines.length);
+  
   let name: string | undefined;
   
-  // Strategy 1: Look for common name patterns in the first few lines
-  const namePatterns = [
-    /^[A-Z][a-zA-Z]+\s+[A-Z][a-zA-Z]+$/,                          // First Last
-    /^[A-Z][a-zA-Z]+\s+[A-Z]\.?\s+[A-Z][a-zA-Z]+$/,              // First M. Last or First M Last
-    /^[A-Z][a-zA-Z]+\s+[A-Z][a-zA-Z]+\s+[A-Z][a-zA-Z]+$/,        // First Middle Last
-    /^[A-Z][a-z]+\s+[A-Z][a-z]+$/,                                // Strict case First Last
-    /^[A-Z]+\s+[A-Z]+$/                                           // ALL CAPS FIRST LAST
-  ];
-  
-  // Check first 20 lines for name
-  for (const line of lines.slice(0, 20)) {
-    // Skip lines with common resume keywords
-    if (/resume|curriculum|vitae|profile|summary|objective|contact|email|phone/i.test(line)) {
-      continue;
+  // Strategy 0A: Check first 2-3 words of the text (for PDFs that don't preserve line breaks)
+  const allWords = text.split(/\s+/).filter(w => w.length > 0);
+  if (allWords.length >= 2) {
+    // Try first 2 words
+    const first2Words = allWords.slice(0, 2).join(' ');
+    if (!/\d/.test(first2Words) && 
+        !/@/.test(first2Words) &&
+        !/linkedin/i.test(first2Words) &&
+        !/github/i.test(first2Words) &&
+        first2Words.length > 5 && first2Words.length < 50) {
+      name = first2Words;
+      console.log('✅ Extracted name (first 2 words):', name);
     }
     
-    for (const pattern of namePatterns) {
-      if (pattern.test(line) && 
-          line.length > 3 && 
-          line.length < 50 && 
-          !/\d/.test(line) && 
-          !/@/.test(line) && 
-          !/http/i.test(line) &&
-          !/\.com/i.test(line)) {
-        name = line;
-        console.log('Extracted name (pattern match):', name);
-        break;
+    // If not found, try first 3 words
+    if (!name && allWords.length >= 3) {
+      const first3Words = allWords.slice(0, 3).join(' ');
+      if (!/\d/.test(first3Words) && 
+          !/@/.test(first3Words) &&
+          !/linkedin/i.test(first3Words) &&
+          !/github/i.test(first3Words) &&
+          first3Words.length > 5 && first3Words.length < 60) {
+        name = first3Words;
+        console.log('✅ Extracted name (first 3 words):', name);
       }
     }
-    if (name) break;
+  }
+  
+  // Strategy 0B: Check first line if it's ALL CAPS or Title Case (for properly formatted resumes)
+  if (!name && lines.length > 0) {
+    const firstLine = lines[0].trim();
+    console.log('📝 First line of resume:', firstLine);
+    // Check if first line looks like a name (2-5 words, no numbers, no special chars except spaces)
+    const words = firstLine.split(/\s+/).filter(w => w.length > 0);
+    console.log(`First line has ${words.length} words:`, words.slice(0, 10));
+    
+    if (words.length >= 2 && words.length <= 5 && 
+        !/\d/.test(firstLine) && 
+        !/@/.test(firstLine) &&
+        !/http/i.test(firstLine) &&
+        !/linkedin/i.test(firstLine) &&
+        !/github/i.test(firstLine) &&
+        firstLine.length > 5 && firstLine.length < 80) {
+      name = firstLine;
+      console.log('✅ Extracted name (first line):', name);
+    } else {
+      console.log('❌ First line did not match name criteria');
+    }
+  }
+  
+  // Strategy 1: Look for "Name:" label first (most reliable)
+  if (!name) {
+    const nameLabelMatch = text.match(/(?:Name|Full Name|Candidate Name|Applicant)[:\s]+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z.]+)+)/i);
+    if (nameLabelMatch && nameLabelMatch[1]) {
+      const extractedName = nameLabelMatch[1].trim();
+      if (extractedName.length > 3 && extractedName.length < 50 && !/\d/.test(extractedName)) {
+        name = extractedName;
+        console.log('✅ Extracted name (label match):', name);
+      }
+    }
+  }
+  
+  // Strategy 2: Look for common name patterns in the first few lines
+  if (!name) {
+    const namePatterns = [
+      /^[A-Z][a-zA-Z]+\s+[A-Z][a-zA-Z]+$/,                          // First Last
+      /^[A-Z][a-zA-Z]+\s+[A-Z]\.?\s+[A-Z][a-zA-Z]+$/,              // First M. Last or First M Last
+      /^[A-Z][a-zA-Z]+\s+[A-Z][a-zA-Z]+\s+[A-Z][a-zA-Z]+$/,        // First Middle Last
+      /^[A-Z][a-z]+\s+[A-Z][a-z]+$/,                                // Strict case First Last
+      /^[A-Z]+\s+[A-Z]+$/,                                          // ALL CAPS FIRST LAST
+      /^[A-Z][a-z]+\s+[A-Z]\s+[A-Z][a-z]+$/                        // First M Last
+    ];
+  
+    // Check first 10 lines for name (most resumes have name at top)
+    for (const line of lines.slice(0, 10)) {
+      // Skip lines with common resume keywords
+      if (/resume|curriculum|vitae|profile|summary|objective|contact|email|phone|address|linkedin|github|portfolio/i.test(line)) {
+        continue;
+      }
+      
+      for (const pattern of namePatterns) {
+        if (pattern.test(line) && 
+            line.length > 3 && 
+            line.length < 50 && 
+            !/\d/.test(line) && 
+            !/@/.test(line) && 
+            !/http/i.test(line) &&
+            !/\.com/i.test(line) &&
+            !/\.in/i.test(line) &&
+            !/\.org/i.test(line)) {
+          name = line;
+          console.log('Extracted name (pattern match):', name);
+          break;
+        }
+      }
+      if (name) break;
+    }
   }
   
   // Strategy 2: If no name found, use the first line that looks like a name
@@ -230,12 +372,28 @@ export function extractContactFields(text: string): ContactFields {
     }
   }
   
-  // Strategy 3: Look for "Name:" label
+  // Strategy 3: Fallback - first line that looks like a name
   if (!name) {
-    const nameMatch = text.match(/(?:name|candidate|applicant)[:\s]+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)/i);
-    if (nameMatch && nameMatch[1]) {
-      name = nameMatch[1].trim();
-      console.log('Extracted name (label match):', name);
+    for (const line of lines.slice(0, 5)) {
+      if (/resume|curriculum|vitae|profile|summary|objective|contact|email|phone|address|linkedin|github/i.test(line)) {
+        continue;
+      }
+      
+      const words = line.split(/\s+/);
+      if (
+        line.length > 5 &&
+        line.length < 50 &&
+        words.length >= 2 &&
+        words.length <= 4 &&
+        !/\d/.test(line) &&
+        !/@/.test(line) &&
+        !/http/i.test(line) &&
+        /^[A-Z]/.test(line) // Starts with capital
+      ) {
+        name = line;
+        console.log('Extracted name (fallback):', name);
+        break;
+      }
     }
   }
 
@@ -244,29 +402,52 @@ export function extractContactFields(text: string): ContactFields {
 }
 
 export function extractResumeData(text: string): ResumeData {
-  // Extract Skills Section
+  // Extract Skills Section with enhanced detection
   const skills: string[] = [];
-  const skillsKeywords = ['skills', 'technical skills', 'technologies', 'expertise', 'proficiency'];
+  const skillsKeywords = ['skills', 'technical skills', 'technologies', 'expertise', 'proficiency', 'competencies', 'tech stack'];
   const commonSkills = [
-    'react', 'node', 'javascript', 'typescript', 'python', 'java', 'mongodb', 'sql', 
-    'mysql', 'postgresql', 'express', 'redux', 'vue', 'angular', 'docker', 'kubernetes',
-    'aws', 'azure', 'git', 'html', 'css', 'sass', 'tailwind', 'bootstrap', 'jest',
-    'graphql', 'rest', 'api', 'microservices', 'agile', 'scrum', 'ci/cd', 'jenkins'
+    // Frontend
+    'react', 'reactjs', 'react.js', 'vue', 'vuejs', 'vue.js', 'angular', 'angularjs', 
+    'next.js', 'nextjs', 'nuxt', 'svelte', 'redux', 'mobx', 'recoil',
+    'html', 'html5', 'css', 'css3', 'sass', 'scss', 'less', 'tailwind', 'tailwindcss', 
+    'bootstrap', 'material-ui', 'mui', 'ant design', 'chakra ui',
+    
+    // Backend
+    'node', 'nodejs', 'node.js', 'express', 'expressjs', 'express.js', 'nestjs', 'nest.js',
+    'python', 'django', 'flask', 'fastapi', 'java', 'spring', 'spring boot',
+    'php', 'laravel', 'ruby', 'rails', 'go', 'golang', 'rust', 'c#', '.net', 'asp.net',
+    
+    // Databases
+    'mongodb', 'mysql', 'postgresql', 'postgres', 'sql', 'nosql', 'redis', 'cassandra',
+    'dynamodb', 'firebase', 'firestore', 'sqlite', 'mariadb', 'oracle', 'elasticsearch',
+    
+    // Languages
+    'javascript', 'typescript', 'python', 'java', 'c++', 'c#', 'php', 'ruby', 'go', 'rust', 'kotlin', 'swift',
+    
+    // DevOps & Cloud
+    'docker', 'kubernetes', 'k8s', 'aws', 'azure', 'gcp', 'google cloud', 'heroku', 'vercel', 'netlify',
+    'ci/cd', 'jenkins', 'github actions', 'gitlab ci', 'terraform', 'ansible',
+    
+    // Tools & Others
+    'git', 'github', 'gitlab', 'bitbucket', 'graphql', 'rest', 'restful', 'api',
+    'microservices', 'agile', 'scrum', 'jest', 'mocha', 'chai', 'cypress', 'selenium',
+    'webpack', 'vite', 'babel', 'npm', 'yarn', 'pnpm', 'postman', 'swagger'
   ];
 
-  // Find skills section
+  // Find skills section first
   for (const keyword of skillsKeywords) {
-    const regex = new RegExp(`${keyword}[:\\s]*([^\\n]+(?:\\n[^\\n]+){0,10})`, 'i');
+    const regex = new RegExp(`${keyword}[:\\s]*([^\\n]+(?:\\n[^\\n]+){0,15})`, 'i');
     const match = text.match(regex);
     if (match) {
       const skillsText = match[1];
       // Extract skills from the section
       commonSkills.forEach(skill => {
-        const skillRegex = new RegExp(`\\b${skill}\\b`, 'i');
+        const skillRegex = new RegExp(`\\b${skill.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
         if (skillRegex.test(skillsText)) {
           const properCase = skillsText.match(skillRegex)?.[0] || skill;
-          if (!skills.includes(properCase)) {
-            skills.push(properCase);
+          const normalizedSkill = properCase.trim();
+          if (!skills.some(s => s.toLowerCase() === normalizedSkill.toLowerCase())) {
+            skills.push(normalizedSkill);
           }
         }
       });
@@ -277,41 +458,67 @@ export function extractResumeData(text: string): ResumeData {
   // If no skills section found, scan entire resume
   if (skills.length === 0) {
     commonSkills.forEach(skill => {
-      const skillRegex = new RegExp(`\\b${skill}\\b`, 'i');
-      if (skillRegex.test(text)) {
-        const match = text.match(skillRegex);
-        if (match && !skills.includes(match[0])) {
-          skills.push(match[0]);
+      const skillRegex = new RegExp(`\\b${skill.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      const matches = text.match(skillRegex);
+      if (matches) {
+        const normalizedSkill = matches[0].trim();
+        if (!skills.some(s => s.toLowerCase() === normalizedSkill.toLowerCase())) {
+          skills.push(normalizedSkill);
         }
       }
     });
   }
 
-  // Extract Projects Section
+  console.log(`Extracted ${skills.length} skills:`, skills);
+
+  // Extract Projects Section with enhanced detection
   const projects: Array<{ name: string; description: string }> = [];
-  const projectKeywords = ['projects', 'project experience', 'personal projects', 'academic projects'];
+  const projectKeywords = ['projects', 'project experience', 'personal projects', 'academic projects', 'key projects', 'portfolio'];
   
   for (const keyword of projectKeywords) {
-    const regex = new RegExp(`${keyword}[:\\s]*([^]*?)(?=\\n\\n[A-Z]|$)`, 'i');
+    const regex = new RegExp(`${keyword}[:\\s]*([^]*?)(?=\\n\\n[A-Z][a-z]+[:\\s]|\\n[A-Z][A-Z]|$)`, 'i');
     const match = text.match(regex);
     if (match) {
       const projectsText = match[1];
-      // Split by common project delimiters
-      const projectBlocks = projectsText.split(/\n(?=[A-Z])/);
+      
+      // Try multiple splitting strategies
+      let projectBlocks: string[] = [];
+      
+      // Strategy 1: Split by bullet points or dashes
+      if (projectsText.includes('•') || projectsText.includes('–') || /^\s*[-*]\s+/m.test(projectsText)) {
+        projectBlocks = projectsText.split(/\n\s*[•–\-*]\s+/).filter(b => b.trim());
+      }
+      // Strategy 2: Split by lines starting with capital letters (project names)
+      else {
+        projectBlocks = projectsText.split(/\n(?=[A-Z][a-zA-Z\s]{3,}:|\n[A-Z])/).filter(b => b.trim());
+      }
       
       projectBlocks.forEach(block => {
         const lines = block.split('\n').filter(l => l.trim());
         if (lines.length > 0) {
-          const name = lines[0].trim().replace(/^[•\-*]\s*/, '');
-          const description = lines.slice(1).join(' ').substring(0, 200);
-          if (name.length > 3 && name.length < 100) {
-            projects.push({ name, description });
+          let name = lines[0].trim().replace(/^[•\-*]\s*/, '').replace(/:\s*$/, '');
+          
+          // Clean up project name
+          name = name.split(/[:\-–]/)[0].trim();
+          
+          const description = lines.slice(1).join(' ').trim().substring(0, 300);
+          
+          // Validate project name
+          if (name.length > 3 && 
+              name.length < 100 && 
+              !/^(project|experience|work|education|skills)/i.test(name) &&
+              !name.match(/^\d{4}/) // Not a year
+          ) {
+            projects.push({ name, description: description || 'Project mentioned in resume' });
           }
         }
       });
-      break;
+      
+      if (projects.length > 0) break;
     }
   }
+  
+  console.log(`Extracted ${projects.length} projects:`, projects.map(p => p.name));
 
   // Extract work experience summary
   const experienceKeywords = ['experience', 'work experience', 'employment'];

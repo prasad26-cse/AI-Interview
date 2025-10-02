@@ -1,6 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Upload, Button, Input, Card, Progress, App, Space, Alert } from 'antd';
-import { UploadOutlined, SendOutlined, VideoCameraOutlined } from '@ant-design/icons';
+import { 
+  UploadOutlined, 
+  SendOutlined, 
+  VideoCameraOutlined,
+  UserOutlined,
+  MailOutlined,
+  PhoneOutlined,
+  AudioOutlined,
+  StopOutlined,
+  LogoutOutlined,
+  FileTextOutlined
+} from '@ant-design/icons';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '@/store';
 import { addCandidate, updateCandidate } from '@/store/slices/candidatesSlice';
@@ -14,17 +25,18 @@ import {
 import { parseResume } from '@/utils/resumeParser';
 import { startRecording, RecordingController } from '@/utils/mediaRecorder';
 import { saveRecording } from '@/utils/storage';
-import { generateQuestion, gradeAnswer, generateFinalSummary } from '@/services/groqService';
+import { generateQuestion, gradeAnswer, generateFinalSummary, clearQuestionCache } from '@/services/huggingfaceService';
 import { calculateRemainingTime, formatTime } from '@/utils/timerUtils';
 import { createSpeechRecognition, SpeechRecognitionController, isSpeechRecognitionSupported } from '@/utils/speechRecognition';
 import { v4 as uuidv4 } from 'uuid';
 import { Session, Question, Answer, Candidate } from '@/types';
 
 export const IntervieweePage: React.FC = () => {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const dispatch = useDispatch();
   const { candidates } = useSelector((state: RootState) => state.candidates);
   const { sessions, currentSessionId } = useSelector((state: RootState) => state.sessions);
+  const { activeTab } = useSelector((state: RootState) => state.ui);
 
   const [stage, setStage] = useState<'upload' | 'collect-info' | 'display-info' | 'interview' | 'completed'>('upload');
   const [currentCandidate, setCurrentCandidate] = useState<Candidate | null>(null);
@@ -41,6 +53,7 @@ export const IntervieweePage: React.FC = () => {
   const [preparationTime, setPreparationTime] = useState(15);
   const [isPreparationPhase, setIsPreparationPhase] = useState(true);
   const [isReadyToAnswer, setIsReadyToAnswer] = useState(false);
+  const [autoStartCountdown, setAutoStartCountdown] = useState(5);
   const [speechRecognition, setSpeechRecognition] = useState<SpeechRecognitionController | null>(null);
   const [isSpeechToTextActive, setIsSpeechToTextActive] = useState(false);
 
@@ -64,6 +77,56 @@ export const IntervieweePage: React.FC = () => {
 
   const currentSession = currentSessionId ? sessions[currentSessionId] : null;
   const currentQuestion = currentSession?.questions[currentSession.currentIndex];
+
+  // Effect to reset page when switching to Interviewee tab
+  const hasResetRef = useRef(false);
+  const prevTabRef = useRef(activeTab);
+  
+  useEffect(() => {
+    // Only run when tab actually changes TO interviewee
+    if (activeTab === 'interviewee' && prevTabRef.current !== 'interviewee' && !hasResetRef.current) {
+      console.log('🔄 Interviewee tab activated - Checking if reset needed');
+      
+      // Reset if interview is completed
+      if (stage === 'completed') {
+        console.log('🗑️ Resetting to upload stage for fresh start');
+        handleStartNewInterview();
+        hasResetRef.current = true;
+        // Reset the flag after a short delay
+        setTimeout(() => { hasResetRef.current = false; }, 1000);
+      }
+    }
+    
+    prevTabRef.current = activeTab;
+  }, [activeTab]); // Only run when tab changes, NOT when stage changes
+
+  // Effect to handle auto-start countdown
+  useEffect(() => {
+    if (isReadyToAnswer && autoStartCountdown > 0) {
+      const timer = setTimeout(() => {
+        setAutoStartCountdown(autoStartCountdown - 1);
+      }, 1000);
+      
+      return () => clearTimeout(timer);
+    } else if (isReadyToAnswer && autoStartCountdown === 0) {
+      console.log('⏰ Auto-starting answer timer');
+      message.info('Starting answer timer automatically...');
+      handleStartAnswer();
+    }
+  }, [isReadyToAnswer, autoStartCountdown]);
+
+  // Effect to stop speech recognition when question changes
+  useEffect(() => {
+    // Stop speech recognition when moving to a new question
+    return () => {
+      if (speechRecognition && isSpeechToTextActive) {
+        console.log('Question changed - stopping speech recognition');
+        speechRecognition.stop();
+        setSpeechRecognition(null);
+        setIsSpeechToTextActive(false);
+      }
+    };
+  }, [currentQuestion?.id]); // Run when question ID changes
 
   useEffect(() => {
     // Check for existing session
@@ -158,15 +221,21 @@ export const IntervieweePage: React.FC = () => {
       if (countdown <= 0) {
         if (preparationTimerRef.current) {
           clearInterval(preparationTimerRef.current);
+          preparationTimerRef.current = null;
         }
-        // Don't auto-start, wait for user to click "Start Answer"
+        // Show "Ready to Answer" and start 5-second countdown
         setIsReadyToAnswer(true);
+        setAutoStartCountdown(5);
       }
     }, 1000);
   };
 
   const handleStartAnswer = () => {
     if (!currentSession || !currentQuestion) return;
+    
+    // Reset auto-start state
+    setIsReadyToAnswer(false);
+    setAutoStartCountdown(5);
     
     // Set the start time NOW when user clicks "Start Answer"
     const startTime = new Date().toISOString();
@@ -178,7 +247,6 @@ export const IntervieweePage: React.FC = () => {
     );
     
     setIsPreparationPhase(false);
-    setIsReadyToAnswer(false);
     setRemainingTime(currentQuestion.timeLimitSec);
     startAnswerTimer();
     
@@ -191,9 +259,15 @@ export const IntervieweePage: React.FC = () => {
       return;
     }
 
+    // Stop any existing recognition first
+    if (speechRecognition) {
+      speechRecognition.stop();
+    }
+
     const recognition = createSpeechRecognition(
       (transcript) => {
         // Update the answer text box with the transcript
+        // Use callback form to ensure we're working with latest state
         setCurrentAnswer(transcript);
       },
       (error) => {
@@ -205,14 +279,15 @@ export const IntervieweePage: React.FC = () => {
     setSpeechRecognition(recognition);
     recognition.start();
     setIsSpeechToTextActive(true);
-    console.log('Speech-to-text started');
+    console.log('Speech-to-text started for current question');
   };
 
   const stopSpeechRecognition = () => {
     if (speechRecognition) {
       speechRecognition.stop();
+      setSpeechRecognition(null); // Clear the reference
       setIsSpeechToTextActive(false);
-      console.log('Speech-to-text stopped');
+      console.log('Speech-to-text stopped and cleared');
     }
   };
 
@@ -278,9 +353,13 @@ export const IntervieweePage: React.FC = () => {
         setMissingFields(missing);
         setCollectingField(missing[0]);
         setStage('collect-info');
-        message.success({ content: 'Resume uploaded. Please provide missing information.', key: 'upload' });
+        message.warning({ 
+          content: `Resume uploaded! We couldn't find ${missing.join(', ')}. Please provide the missing information.`, 
+          key: 'upload',
+          duration: 5
+        });
       } else {
-        message.success({ content: 'Resume parsed successfully!', key: 'upload' });
+        message.success({ content: 'Resume parsed successfully! All information extracted.', key: 'upload' });
         setStage('display-info');
       }
     } catch (error: any) {
@@ -295,9 +374,17 @@ export const IntervieweePage: React.FC = () => {
   };
 
   const handleCollectField = () => {
-    if (!inputValue.trim() || !currentCandidate || !collectingField) return;
+    console.log('handleCollectField called');
+    console.log('inputValue:', inputValue);
+    console.log('currentCandidate:', currentCandidate);
+    console.log('collectingField:', collectingField);
+    
+    if (!inputValue.trim() || !currentCandidate || !collectingField) {
+      console.log('❌ Validation failed - missing required data');
+      return;
+    }
 
-    console.log('Collecting field:', collectingField, 'Value:', inputValue.trim());
+    console.log('✅ Collecting field:', collectingField, 'Value:', inputValue.trim());
 
     dispatch(
       updateCandidate({
@@ -331,8 +418,37 @@ export const IntervieweePage: React.FC = () => {
     console.log('Starting interview for candidate:', candidateId);
     console.log('Resume content length:', resumeContent?.length || 0);
     
-    // API key is now permanent, always initialized
-    console.log('Starting interview with permanent API key...');
+    // CLEAR ALL PREVIOUS DATA BEFORE STARTING NEW INTERVIEW
+    console.log('🗑️ Clearing previous interview data...');
+    
+    // Clear question cache to ensure fresh questions
+    clearQuestionCache('default-session');
+    clearQuestionCache(`interview-${candidateId}`);
+    
+    // Reset all state variables
+    setCurrentAnswer('');
+    setRemainingTime(0);
+    setRecording(null);
+    setHasMediaPermission(false);
+    setIsGrading(false);
+    setVideoStream(null);
+    setPreparationTime(15);
+    setIsPreparationPhase(true);
+    setIsReadyToAnswer(false);
+    
+    // Clear any active timers
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    if (preparationTimerRef.current) {
+      clearInterval(preparationTimerRef.current);
+      preparationTimerRef.current = null;
+    }
+    
+    console.log('✅ Previous data cleared. Starting fresh interview...');
+    
+    // API key is hardcoded - always ready to start
 
     // Validate resume content
     if (!resumeContent || resumeContent.trim().length < 20) {
@@ -353,14 +469,17 @@ export const IntervieweePage: React.FC = () => {
       let failedAttempts = 0;
       const maxRetries = 2;
       
+      // Create a unique session key for this interview
+      const sessionKey = `interview-${candidateId}-${Date.now()}`;
+      
       for (const difficulty of ['easy', 'easy', 'medium', 'medium', 'hard', 'hard'] as const) {
         console.log(`Generating ${difficulty} question...`);
         let questionGenerated = false;
         
         for (let attempt = 0; attempt <= maxRetries && !questionGenerated; attempt++) {
           try {
-            const question = await generateQuestion(difficulty, resumeContent);
-            console.log(`Generated question:`, question.text);
+            const question = await generateQuestion(difficulty, resumeContent, sessionKey);
+            console.log(`Generated unique question:`, question.text);
             questions.push(question);
             questionGenerated = true;
           } catch (error: any) {
@@ -436,16 +555,31 @@ export const IntervieweePage: React.FC = () => {
 
   const requestMediaPermission = async () => {
     try {
+      console.log('📹 Requesting camera and microphone permission...');
       const controller = await startRecording();
+      console.log('✅ Recording controller created:', controller);
+      
       setRecording(controller);
       setVideoStream(controller.stream);
       setHasMediaPermission(true);
-
-      if (videoRef.current) {
+      
+      // Set video element source
+      if (videoRef.current && controller.stream) {
         videoRef.current.srcObject = controller.stream;
+        console.log('✅ Video stream connected to video element');
       }
-    } catch (error) {
-      message.warning('Camera/microphone access denied. You can still type your answers.');
+      
+      message.success({ 
+        content: 'Camera and microphone enabled! Recording started.', 
+        duration: 2 
+      });
+      console.log('✅ Media permission granted, recording started');
+    } catch (error: any) {
+      console.error('❌ Media permission error:', error);
+      message.warning({ 
+        content: 'Camera/microphone not available. You can still type your answer.', 
+        duration: 3 
+      });
       setHasMediaPermission(false);
     }
   };
@@ -506,15 +640,16 @@ export const IntervieweePage: React.FC = () => {
         answer.llmScore = score;
         answer.llmFeedback = feedback;
         gradingSuccess = true;
+        console.log(`Answer graded successfully: ${score}/10`);
       } catch (error) {
         gradingAttempts++;
         console.error(`Grading failed (attempt ${gradingAttempts}):`, error);
         
         if (gradingAttempts >= maxGradingAttempts) {
-          // Provide default score if grading fails
-          answer.llmScore = 5;
-          answer.llmFeedback = 'Answer recorded. Automatic grading unavailable - manual review recommended.';
-          message.warning('Automatic grading temporarily unavailable. Your answer has been saved.');
+          // Always give 0 if grading fails
+          answer.llmScore = 0;
+          answer.llmFeedback = 'Automatic grading failed. Please try again.';
+          message.warning('Automatic grading failed. Your answer has been saved with 0 score.');
         } else {
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
@@ -525,21 +660,40 @@ export const IntervieweePage: React.FC = () => {
 
     // Move to next question or complete
     if (currentSession.currentIndex < currentSession.questions.length - 1) {
-      dispatch(advanceQuestion(currentSession.id));
+      // CRITICAL: Stop speech recognition before moving to next question
+      stopSpeechRecognition();
+      
+      // Clear the answer box
       setCurrentAnswer('');
+      
+      // Advance to next question
+      dispatch(advanceQuestion(currentSession.id));
       setIsGrading(false);
       
       // Reset to preparation phase for next question
       // The useEffect will handle starting the preparation timer
       setIsPreparationPhase(true);
       setIsReadyToAnswer(false);
+      
+      // Reset speech recognition state
+      setIsSpeechToTextActive(false);
     } else {
       await completeInterview();
     }
   };
 
   const handleAutoSubmit = async () => {
-    if (isGrading) return;
+    console.log('⏰ Time expired - Auto-submitting answer');
+    console.log('Current answer length:', currentAnswer.length);
+    console.log('Is grading:', isGrading);
+    
+    if (isGrading) {
+      console.log('Already grading, skipping auto-submit');
+      return;
+    }
+    
+    // Auto-submit even if answer is empty
+    message.info('Time is up! Submitting your answer...');
     await handleSubmitAnswer();
   };
 
@@ -624,6 +778,9 @@ export const IntervieweePage: React.FC = () => {
       })
     );
 
+    // Clear the question cache for this session
+    clearQuestionCache(`interview-${currentSession.candidateId}-*`);
+
     setStage('completed');
     message.success({ content: 'Interview completed successfully!', key: 'complete' });
     setIsGrading(false);
@@ -702,23 +859,164 @@ export const IntervieweePage: React.FC = () => {
     </Card>
   );
 
-  const renderCollectInfoStage = () => (
-    <Card title="Complete Your Profile" style={{ maxWidth: 600, margin: '0 auto' }}>
-      <p>Please provide your {collectingField}:</p>
-      <Space.Compact style={{ width: '100%' }}>
-        <Input
-          placeholder={`Enter your ${collectingField}`}
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          onPressEnter={handleCollectField}
-          size="large"
+  const renderCollectInfoStage = () => {
+    if (!collectingField) return null;
+    
+    const currentFieldIndex = missingFields.indexOf(collectingField);
+    const totalMissing = missingFields.length;
+    const isPhoneField = collectingField === 'phone';
+    const isEmailField = collectingField === 'email';
+    
+    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const value = e.target.value;
+      
+      if (isPhoneField) {
+        // Only allow digits and limit to 10 characters
+        const digitsOnly = value.replace(/\D/g, '');
+        setInputValue(digitsOnly.slice(0, 10));
+      } else {
+        setInputValue(value);
+      }
+    };
+    
+    const getPlaceholder = () => {
+      if (isPhoneField) return 'Enter 10-digit mobile number';
+      if (isEmailField) return 'Enter your email (e.g., name@example.com)';
+      return `Enter your ${collectingField}`;
+    };
+    
+    const getValidationMessage = () => {
+      if (isPhoneField && inputValue.length > 0 && inputValue.length < 10) {
+        return `Phone number must be exactly 10 digits (current: ${inputValue.length})`;
+      }
+      return null;
+    };
+    
+    const isValid = () => {
+      if (isPhoneField) {
+        return inputValue.length === 10 && /^\d{10}$/.test(inputValue);
+      }
+      if (isEmailField) {
+        return /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(inputValue);
+      }
+      return inputValue.trim().length > 0;
+    };
+    
+    const getFieldIcon = () => {
+      if (collectingField === 'name') return <UserOutlined />;
+      if (collectingField === 'email') return <MailOutlined />;
+      if (collectingField === 'phone') return <PhoneOutlined />;
+      return <FileTextOutlined />;
+    };
+
+    const getFieldDescription = () => {
+      if (collectingField === 'name') return 'Enter your full name as it appears on official documents';
+      if (collectingField === 'email') return 'Enter a valid email address where we can reach you';
+      if (collectingField === 'phone') return 'Enter your 10-digit mobile number (without country code)';
+      return 'Please provide the required information';
+    };
+
+    return (
+      <Card 
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ fontSize: 24 }}>{getFieldIcon()}</span>
+            <span>Complete Your Profile</span>
+          </div>
+        } 
+        style={{ maxWidth: 600, margin: '0 auto' }}
+      >
+        <Alert
+          message={`⚠️ Missing Information (${currentFieldIndex + 1} of ${totalMissing})`}
+          description={
+            totalMissing === 1 
+              ? `We couldn't extract your ${collectingField} from the resume. Please provide it below.`
+              : `We couldn't extract ${missingFields.join(', ')} from your resume. Please provide them one by one.`
+          }
+          type="warning"
+          showIcon
+          style={{ marginBottom: 24 }}
         />
-        <Button type="primary" onClick={handleCollectField} size="large">
-          Submit
-        </Button>
-      </Space.Compact>
-    </Card>
-  );
+        
+        <div style={{ 
+          background: '#f5f5f5', 
+          padding: 20, 
+          borderRadius: 8, 
+          marginBottom: 20,
+          border: '2px dashed #d9d9d9'
+        }}>
+          <h3 style={{ marginTop: 0, color: '#1890ff' }}>
+            {getFieldIcon()} Enter Your {collectingField.charAt(0).toUpperCase() + collectingField.slice(1)}
+          </h3>
+          <p style={{ color: '#666', marginBottom: 16 }}>
+            {getFieldDescription()}
+          </p>
+          
+          <Space.Compact style={{ width: '100%', marginBottom: 8 }}>
+            <Input
+              placeholder={getPlaceholder()}
+              value={inputValue}
+              onChange={handleInputChange}
+              onPressEnter={() => isValid() && handleCollectField()}
+              size="large"
+              maxLength={isPhoneField ? 10 : undefined}
+              type={isPhoneField ? 'tel' : isEmailField ? 'email' : 'text'}
+              status={inputValue.length > 0 && !isValid() ? 'error' : ''}
+              autoFocus
+            />
+            <Button 
+              type="primary" 
+              onClick={handleCollectField} 
+              size="large"
+              disabled={!isValid()}
+              style={{ minWidth: 100 }}
+            >
+              Next →
+            </Button>
+          </Space.Compact>
+          
+          {getValidationMessage() && (
+            <p style={{ color: '#ff4d4f', fontSize: 14, margin: '8px 0 0 0' }}>
+              ⚠️ {getValidationMessage()}
+            </p>
+          )}
+          {isPhoneField && inputValue.length === 10 && (
+            <p style={{ color: '#52c41a', fontSize: 14, margin: '8px 0 0 0' }}>
+              ✓ Valid 10-digit phone number
+            </p>
+          )}
+          {isEmailField && isValid() && inputValue.length > 0 && (
+            <p style={{ color: '#52c41a', fontSize: 14, margin: '8px 0 0 0' }}>
+              ✓ Valid email address
+            </p>
+          )}
+        </div>
+      </Card>
+    );
+  };
+
+  const handleExitInterview = () => {
+    modal.confirm({
+      title: '⚠️ Exit Interview?',
+      content: 'Are you sure you want to exit? Your current progress will be saved and marked as incomplete.',
+      okText: 'Yes, Exit',
+      cancelText: 'Continue Interview',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        if (currentSession) {
+          // Mark session as paused/incomplete
+          dispatch(completeSession({
+            sessionId: currentSession.id,
+            finalScore: 0,
+            finalSummary: 'Interview exited by candidate. Incomplete submission.'
+          }));
+          
+          message.info('Interview exited. Your progress has been saved.');
+          handleStartNewInterview();
+        }
+      }
+    });
+  };
 
   const renderInterviewStage = () => {
     if (!currentSession || !currentQuestion) return null;
@@ -737,7 +1035,23 @@ export const IntervieweePage: React.FC = () => {
     const difficultyColors = getDifficultyColor();
 
     return (
-      <div style={{ maxWidth: 800, margin: '0 auto' }} className="scale-in">
+      <div style={{ maxWidth: 800, margin: '0 auto', position: 'relative' }} className="scale-in">
+        {/* Exit Button - Top Right Corner */}
+        <Button
+          danger
+          icon={<LogoutOutlined />}
+          onClick={handleExitInterview}
+          style={{
+            position: 'absolute',
+            top: -50,
+            right: 0,
+            zIndex: 10,
+            fontWeight: 600
+          }}
+        >
+          Exit Interview
+        </Button>
+        
         <Card 
           style={{
             borderRadius: 16,
@@ -827,94 +1141,78 @@ export const IntervieweePage: React.FC = () => {
           </div>
 
           {isPreparationPhase ? (
-            <div style={{ marginBottom: 24, textAlign: 'center' }} className="scale-in">
-              <Alert
-                message={isReadyToAnswer ? "✅ Ready to Answer!" : "⏱️ Preparation Time"}
-                description={
-                  isReadyToAnswer
-                    ? "Click the button below to start answering. Your timer will begin and recording will start."
-                    : `Read the question carefully. You have ${preparationTime} seconds to prepare...`
-                }
-                type={isReadyToAnswer ? "success" : "info"}
-                showIcon
-                style={{ 
-                  marginBottom: 20,
-                  borderRadius: 12,
-                  border: isReadyToAnswer ? '2px solid #10b981' : '2px solid #3b82f6'
-                }}
-              />
+            <div style={{ marginBottom: 16 }}>
               {!isReadyToAnswer ? (
-                <div style={{
-                  padding: 32,
-                  background: 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)',
-                  borderRadius: 16,
-                  border: '3px solid #3b82f6'
+                <div style={{ 
+                  padding: '12px 20px',
+                  background: '#f0f9ff',
+                  borderRadius: 8,
+                  border: '1px solid #3b82f6',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginBottom: 12
                 }}>
-                  <div style={{ fontSize: 16, color: '#1e40af', marginBottom: 12, fontWeight: 600 }}>
-                    ⏳ Time Remaining
-                  </div>
-                  <h1 style={{ 
-                    color: '#1e40af', 
-                    fontSize: 64, 
-                    margin: 0,
-                    fontWeight: 800,
-                    textShadow: '2px 2px 4px rgba(0,0,0,0.1)'
-                  }} className="heartbeat">
-                    {preparationTime}s
-                  </h1>
+                  <span style={{ fontSize: 14, color: '#1e40af', fontWeight: 500 }}>
+                    ⏱️ Preparation: <strong>{preparationTime}s</strong>
+                  </span>
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={() => {
+                      if (preparationTimerRef.current) {
+                        clearInterval(preparationTimerRef.current);
+                      }
+                      setIsReadyToAnswer(true);
+                      setPreparationTime(0);
+                    }}
+                    style={{ color: '#3b82f6', fontWeight: 600 }}
+                  >
+                    Skip ⚡
+                  </Button>
                 </div>
               ) : (
                 <Button
                   type="primary"
                   size="large"
                   onClick={handleStartAnswer}
-                  className="hover-lift btn-ripple"
+                  block
                   style={{
-                    height: 64,
-                    fontSize: 20,
-                    fontWeight: 700,
-                    borderRadius: 16,
-                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                    border: 'none',
-                    boxShadow: '0 8px 20px rgba(16, 185, 129, 0.4)',
-                    padding: '0 48px'
+                    height: 48,
+                    fontSize: 16,
+                    fontWeight: 600,
+                    borderRadius: 8,
+                    background: autoStartCountdown <= 3 ? '#f59e0b' : '#10b981',
+                    border: 'none'
                   }}
                 >
-                  🎤 Start Answering Now!
+                  {autoStartCountdown > 0 
+                    ? `Start Answering (Auto-start in ${autoStartCountdown}s)` 
+                    : 'Start Answering'}
                 </Button>
               )}
             </div>
           ) : (
-            <div style={{ marginBottom: 24, textAlign: 'center' }} className="scale-in">
-              <div style={{
-                padding: 24,
-                background: remainingTime < 10 
-                  ? 'linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)' 
-                  : 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)',
-                borderRadius: 16,
-                border: remainingTime < 10 ? '3px solid #ef4444' : '3px solid #10b981',
-                boxShadow: remainingTime < 10 
-                  ? '0 0 20px rgba(239, 68, 68, 0.3)' 
-                  : '0 4px 12px rgba(16, 185, 129, 0.2)'
+            <div style={{ 
+              padding: '10px 16px',
+              background: remainingTime < 10 ? '#fef2f2' : '#f0fdf4',
+              borderRadius: 8,
+              border: `1px solid ${remainingTime < 10 ? '#ef4444' : '#10b981'}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 16
+            }}>
+              <span style={{ fontSize: 14, color: remainingTime < 10 ? '#991b1b' : '#065f46', fontWeight: 500 }}>
+                {remainingTime < 10 ? '⚠️ Time Running Out!' : '⏰ Time Remaining'}
+              </span>
+              <span style={{ 
+                fontSize: 20, 
+                fontWeight: 700,
+                color: remainingTime < 10 ? '#dc2626' : '#059669'
               }}>
-                <div style={{ 
-                  fontSize: 16, 
-                  color: remainingTime < 10 ? '#991b1b' : '#065f46', 
-                  marginBottom: 8, 
-                  fontWeight: 600 
-                }}>
-                  {remainingTime < 10 ? '⚠️ Time Running Out!' : '⏰ Time Remaining'}
-                </div>
-                <h1 style={{ 
-                  color: remainingTime < 10 ? '#dc2626' : '#059669',
-                  fontSize: 56,
-                  margin: 0,
-                  fontWeight: 800,
-                  textShadow: '2px 2px 4px rgba(0,0,0,0.1)'
-                }} className={remainingTime < 10 ? 'shake' : ''}>
-                  {formatTime(remainingTime)}
-                </h1>
-              </div>
+                {formatTime(remainingTime)}
+              </span>
             </div>
           )}
 
@@ -951,30 +1249,10 @@ export const IntervieweePage: React.FC = () => {
             />
           )}
 
-          {!isPreparationPhase && !isSpeechToTextActive && isSpeechRecognitionSupported() && (
-            <Alert
-              message="💡 Tip: Enable Speech-to-Text"
-              description={
-                <div>
-                  Click the button below to enable voice input and speak your answer.
-                  <Button 
-                    type="link" 
-                    size="small" 
-                    onClick={startSpeechRecognition}
-                    style={{ padding: 0, marginLeft: 8 }}
-                  >
-                    Enable Now
-                  </Button>
-                </div>
-              }
-              type="info"
-              showIcon
-              style={{ marginBottom: 16 }}
-            />
-          )}
+          {/* Removed speech-to-text tip alert for cleaner UI */}
 
           <Input.TextArea
-            placeholder={isPreparationPhase ? "Please wait for the timer to start..." : "Type or speak your answer here..."}
+            placeholder={isPreparationPhase ? "Please wait for the timer to start..." : "Type your answer here or use the microphone button below..."}
             value={currentAnswer}
             onChange={(e) => setCurrentAnswer(e.target.value)}
             rows={8}
@@ -983,35 +1261,36 @@ export const IntervieweePage: React.FC = () => {
           />
 
           <Space direction="vertical" style={{ width: '100%' }} size="middle">
-            {!isPreparationPhase && (
-              <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                {isSpeechRecognitionSupported() && (
-                  <Button
-                    type={isSpeechToTextActive ? 'default' : 'dashed'}
-                    danger={isSpeechToTextActive}
-                    onClick={isSpeechToTextActive ? stopSpeechRecognition : startSpeechRecognition}
-                    disabled={isGrading}
-                    icon={isSpeechToTextActive ? '🔴' : '🎤'}
-                  >
-                    {isSpeechToTextActive ? 'Stop Voice Input' : 'Start Voice Input'}
-                  </Button>
-                )}
-                <div style={{ color: '#666', fontSize: '12px' }}>
-                  {currentAnswer.length} characters
-                </div>
-              </Space>
+            {!isPreparationPhase && isSpeechRecognitionSupported() && remainingTime > 0 && (
+              <Button
+                type={isSpeechToTextActive ? 'default' : 'dashed'}
+                danger={isSpeechToTextActive}
+                icon={isSpeechToTextActive ? <StopOutlined /> : <AudioOutlined />}
+                onClick={isSpeechToTextActive ? stopSpeechRecognition : startSpeechRecognition}
+                disabled={isGrading || remainingTime <= 0}
+                size="large"
+                block
+                style={{ height: 48 }}
+              >
+                {isSpeechToTextActive ? 'Stop Voice Input' : 'Enable Voice Input'}
+              </Button>
             )}
-
+            
             <Button
               type="primary"
               icon={<SendOutlined />}
               onClick={handleSubmitAnswer}
               loading={isGrading}
-              disabled={isGrading || isPreparationPhase}
+              disabled={isGrading || isPreparationPhase || currentAnswer.trim().length === 0}
               size="large"
               block
+              style={{
+                background: currentAnswer.trim().length === 0 ? '#d9d9d9' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                border: 'none',
+                height: 56
+              }}
             >
-              {isGrading ? 'Grading...' : isPreparationPhase ? 'Waiting...' : 'Submit Answer'}
+              {isGrading ? 'Grading Your Answer...' : isPreparationPhase ? 'Preparation Time...' : currentAnswer.trim().length === 0 ? 'Type Your Answer First' : 'Submit Answer'}
             </Button>
           </Space>
         </Card>
@@ -1049,6 +1328,14 @@ export const IntervieweePage: React.FC = () => {
 
   const renderCompletedStage = () => {
     const score = currentSession?.finalScore || 0;
+    
+    // Calculate statistics
+    const totalQuestions = currentSession?.questions.length || 0;
+    const answeredQuestions = currentSession?.answers.filter(ans => (ans.text?.trim() || '').length > 0).length || 0;
+    const unansweredQuestions = totalQuestions - answeredQuestions;
+    const totalScore = currentSession?.answers.reduce((sum, ans) => sum + (ans.llmScore || 0), 0) || 0;
+    const maxScore = totalQuestions * 10;
+    
     const getGreeting = () => {
       if (score >= 80) return '🎉 Excellent Performance!';
       if (score >= 60) return '👍 Good Job!';
@@ -1061,6 +1348,14 @@ export const IntervieweePage: React.FC = () => {
       if (score >= 60) return '#1890ff';
       if (score >= 40) return '#faad14';
       return '#ff4d4f';
+    };
+    
+    const getPerformanceMessage = () => {
+      if (score >= 80) return 'Outstanding! You demonstrated excellent technical knowledge and communication skills.';
+      if (score >= 60) return 'Good work! You showed solid understanding with room for improvement in some areas.';
+      if (score >= 40) return 'Fair performance. Consider reviewing the topics covered and practicing more.';
+      if (score >= 20) return 'You need more preparation. Focus on strengthening your fundamentals.';
+      return 'Limited responses detected. Please ensure you answer all questions in future interviews.';
     };
 
     return (
@@ -1084,9 +1379,8 @@ export const IntervieweePage: React.FC = () => {
         </div>
 
         <Alert
-          message={`Dear ${currentCandidate?.name || 'Candidate'},`}
-          description="Thank you for completing the interview! We appreciate the time and effort you put into your responses."
-          type="success"
+          message={getPerformanceMessage()}
+          type={score >= 60 ? 'success' : score >= 40 ? 'warning' : 'info'}
           showIcon
           style={{ marginBottom: 20 }}
         />
@@ -1097,41 +1391,38 @@ export const IntervieweePage: React.FC = () => {
           borderRadius: 8,
           marginBottom: 20
         }}>
-          <h3 style={{ marginTop: 0 }}>📊 Performance Summary</h3>
-          <p style={{ lineHeight: 1.8, marginBottom: 0 }}>
-            {currentSession?.finalSummary || 'Your interview has been recorded and will be reviewed by our team.'}
-          </p>
+          <h3 style={{ marginTop: 0 }}>📊 Detailed Statistics</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+            <div>
+              <p style={{ margin: 0, color: '#666' }}>Total Questions</p>
+              <p style={{ margin: 0, fontSize: 24, fontWeight: 'bold' }}>{totalQuestions}</p>
+            </div>
+            <div>
+              <p style={{ margin: 0, color: '#666' }}>Questions Answered</p>
+              <p style={{ margin: 0, fontSize: 24, fontWeight: 'bold', color: '#52c41a' }}>{answeredQuestions}</p>
+            </div>
+            <div>
+              <p style={{ margin: 0, color: '#666' }}>Questions Skipped</p>
+              <p style={{ margin: 0, fontSize: 24, fontWeight: 'bold', color: unansweredQuestions > 0 ? '#ff4d4f' : '#52c41a' }}>{unansweredQuestions}</p>
+            </div>
+            <div>
+              <p style={{ margin: 0, color: '#666' }}>Total Points</p>
+              <p style={{ margin: 0, fontSize: 24, fontWeight: 'bold' }}>{totalScore}/{maxScore}</p>
+            </div>
+          </div>
+          <div style={{ 
+            background: '#fff', 
+            padding: 12, 
+            borderRadius: 6,
+            border: '1px solid #d9d9d9'
+          }}>
+            <p style={{ margin: 0, fontWeight: 500, marginBottom: 8 }}>AI Feedback:</p>
+            <p style={{ lineHeight: 1.8, marginBottom: 0 }}>
+              {currentSession?.finalSummary || 'Your interview has been recorded and will be reviewed by our team.'}
+            </p>
+          </div>
         </div>
 
-        <div style={{ 
-          background: '#e6f7ff', 
-          padding: 16, 
-          borderRadius: 8,
-          marginBottom: 20,
-          border: '1px solid #91d5ff'
-        }}>
-          <h4 style={{ marginTop: 0, color: '#1890ff' }}>📧 What's Next?</h4>
-          <ul style={{ marginBottom: 0, paddingLeft: 20 }}>
-            <li>Your responses have been saved successfully</li>
-            <li>Our team will review your interview</li>
-            <li>You'll receive feedback at: <strong>{currentCandidate?.email || 'your email'}</strong></li>
-            <li>Expected response time: 2-3 business days</li>
-          </ul>
-        </div>
-
-        <div style={{ marginBottom: 20 }}>
-          <h4>📋 Interview Details</h4>
-          <p><strong>Candidate:</strong> {currentCandidate?.name || 'N/A'}</p>
-          <p><strong>Email:</strong> {currentCandidate?.email || 'N/A'}</p>
-          <p><strong>Questions Answered:</strong> {currentSession?.questions.length || 0}</p>
-          <p><strong>Completed On:</strong> {new Date().toLocaleDateString('en-US', { 
-            year: 'numeric', 
-            month: 'long', 
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-          })}</p>
-        </div>
 
         <Button 
           type="primary" 
@@ -1168,11 +1459,16 @@ export const IntervieweePage: React.FC = () => {
         size="large" 
         block
         onClick={() => {
+          console.log('🚀 Start Interview button clicked');
+          console.log('currentCandidate:', currentCandidate);
+          console.log('resumeText length:', resumeText?.length);
+          
           if (currentCandidate && resumeText) {
-            console.log('Start Interview button clicked');
+            console.log('✅ Starting interview for:', currentCandidate.name);
             startInterview(currentCandidate.id, resumeText);
           } else {
-            message.error('Missing candidate information or resume content');
+            console.log('❌ Missing data - candidate:', !!currentCandidate, 'resumeText:', !!resumeText);
+            message.error('Missing candidate information or resume content. Please upload resume again.');
           }
         }}
       >
